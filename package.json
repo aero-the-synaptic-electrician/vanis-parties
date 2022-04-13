@@ -1,0 +1,17 @@
+{
+  "dependencies": {
+    "typescript": "^4.6.3",
+    "uWebSockets.js": "uNetworking/uWebSockets.js#v20.6.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js",
+    "up": "tsnd src"
+  },
+  "devDependencies": {
+    "@types/node": "^17.0.23"
+  },
+  "engines": {
+    "node": ">=16.*.*"
+  }
+}

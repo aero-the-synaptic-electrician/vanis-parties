@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "target": "esnext",
+    "alwaysStrict": true,
+    "allowSyntheticDefaultImports": true,
+    "pretty": true,
+    "outDir": "./build",
+    "esModuleInterop": true
+  },
+  "include": ["src"],
+  "exclude": ["node_modules"]
+}
