@@ -129,6 +129,21 @@ export class WsAPI {
         // case 3: {
         //   ws.send(new Uint8Array([3]), true);
         // }
+        // marker
+        case 4: {
+          if (socket.state === SocketState.NONE) return ws.end(1003, 'Invalid opcode');
+
+          const [x, y] = [reader.readInt16(), reader.readInt16()];
+          const duration = 5 * 1000;
+          const validUntil = Date.now() + duration;
+
+          const lobby = socket.currentLobby ? this.lobbies.get(socket.currentLobby) : undefined;
+          if (lobby) {
+            const marker = new Writer(1 + 2 + 2 + 2 + 8).writeUint8(4).writeUint16(socket.pid!).writeInt16(x).writeInt16(y).writeFloat64(validUntil).raw.buffer;
+            lobby.members.forEach(ws => ws.send(marker, true));
+          }
+          break;
+        }
       }
     } catch (e) {
       console.error(e);
