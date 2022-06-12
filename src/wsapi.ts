@@ -25,6 +25,8 @@ export interface SocketData {
 
   flags: number;
   tabFlags?: number;
+
+  pinged: boolean;
 }
 
 const httpHandler = (res: uWS.HttpResponse) => res.writeStatus('200 OK').writeHeader('Access-Control-Allow-Origin', '*').end('...\nhi\n...\nawkward...');
@@ -150,7 +152,7 @@ export class WsAPI {
       ws.end(1002, 'Malformed frame');
     }
   };
-  open: uWS.WebSocketBehavior['open'] = ws => this.sockets.set(ws, { lastUpdate: Date.now(), state: SocketState.NONE, flags: 0 });
+  open: uWS.WebSocketBehavior['open'] = ws => this.sockets.set(ws, { lastUpdate: Date.now(), state: SocketState.NONE, flags: 0, pinged: false });
 
   lobbyChange = (ws: uWS.WebSocket, url: string, tagId: number) => {
     this.lobbyLeave(ws);
@@ -183,7 +185,12 @@ export class WsAPI {
 
     // check sockets for inactivity
     this.sockets.forEach((socket, ws) => {
-      if (now - socket.lastUpdate >= 40_000) ws.end(1000, 'AFK');
+      const inactiveTime = now - socket.lastUpdate;
+      if (inactiveTime >= 40_000 && socket.pinged === true) ws.end(1000, 'AFK');
+      else if (inactiveTime >= 30_000) {
+        if (!socket.pinged) ws.send(new Uint8Array([3]), true); // server-side ping in case user is tabbed out
+        socket.pinged = true;
+      } else socket.pinged = false;
     });
 
     // send actual data

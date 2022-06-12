@@ -232,6 +232,10 @@ class ApiConnection {
 
         break;
       }
+      case 3: {
+        this.sendData();
+        break;
+      }
       case 4: {
         const [pid, x, y, validUntil] = [data.readUint16(), data.readInt16(), data.readInt16(), data.readFloat64()];
 
