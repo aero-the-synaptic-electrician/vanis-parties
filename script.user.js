@@ -119,6 +119,7 @@ const formatUrl = url => url.replace('wss://', '').replace(/\/$/, '');
 class ApiConnection {
   constructor(_) {
     this._ = _;
+    this.markersController = new MarkersController(this);
     this.toast = Swal.mixin({ toast: true, position: 'top', showConfirmButton: false, showCloseButton: true });
     this.v = 1;
     this.url = 'wss://vanis-parties.herokuapp.com';
@@ -231,6 +232,13 @@ class ApiConnection {
 
         break;
       }
+      case 4: {
+        const [pid, x, y, validUntil] = [data.readUint16(), data.readInt16(), data.readInt16(), data.readFloat64()];
+
+        this.markersController.addMarker(pid, x, y, validUntil);
+
+        break;
+      }
       default: {
         console.log('invalid opcode received: ' + opcode);
       }
@@ -278,6 +286,211 @@ class ApiConnection {
 
     this.ws.send(data.raw.buffer);
   };
+}
+
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (x, min, max) => Math.min(Math.max(x, min), max);
+class MarkersController {
+  constructor(api) {
+    /** @type {ApiConnection} */
+    this.api = api;
+    this.markers = [];
+    this.staticSize = 512 + 256;
+    this.inset = 25;
+    this.delay = 60;
+    this.visibleThreshold = this.staticSize / 3;
+    this.cameraBox = { top: 0, left: 0, right: 0, bottom: 0 };
+    this.time = Date.now();
+
+    this.setupHooks();
+  }
+  addMarker(pid, x, y, validUntil) {
+    const player = this.api._.playerManager.getPlayer(pid);
+    if (!player) return;
+
+    const idx = this.markers.findIndex(m => m.pid === pid);
+    if (idx !== -1) this.removeMarker(idx);
+
+    const size = 1024;
+    const marker = { pid, validUntil, inRange: true, sprite: MarkersController.createPlayerSprite(player) };
+
+    marker.oSize = marker.size = marker.sprite.height = marker.sprite.width = size;
+    marker.sprite.x = marker.oX = marker.x = marker.pingX = x;
+    marker.sprite.y = marker.oY = marker.y = marker.pingY = y;
+    marker.dnX = marker.dnY = marker.dX = marker.dY = marker.doX = marker.doY = 0;
+    marker.time = marker.createdAt = Date.now();
+    marker.sprite.children[2].visible = false;
+
+    this.markers.push(marker);
+    this.updateMarkers();
+    this.api._.scene.container.addChild(marker.sprite);
+  }
+  sendMarker() {
+    const { x, y } = this.api._.mouse;
+    return this.api.ws.send(new Writer(5).writeUint8(4).writeInt16(x).writeInt16(y).raw.buffer);
+  }
+  removeMarker(index) {
+    if (!this.markers[index].sprite._destroyed) this.markers[index].sprite.destroy();
+    this.markers.splice(index, 1);
+  }
+  setupHooks() {
+    this.api._.events.$on('game-started', () => {
+      this.api._.ticker.add(() => this.tick());
+
+      const onUp = e => e.code === 'ControlLeft' && this.sendMarker();
+
+      const c = this.api._.renderer.view;
+      c.addEventListener('keyup', onUp);
+      this.api._.events.$once('game-stopped', () => c.removeEventListener('keyup', onUp));
+    });
+    const updateCamera = this.api._.updateCamera;
+    this.api._.updateCamera = (...args) => {
+      const res = updateCamera(...args);
+
+      this.updateBoundingBox();
+
+      return res;
+    };
+  }
+  tick() {
+    const now = Date.now();
+    this.markers.forEach((marker, idx) => {
+      if (marker.validUntil < now) return this.removeMarker(idx);
+
+      if (!this.api._.playerManager.getPlayer(marker.pid)) return this.removeMarker(idx);
+
+      if (marker.inRange) {
+        marker.oSize = marker.sprite.height;
+        marker.size = this.staticSize;
+        marker.oX = marker.x;
+        marker.oY = marker.y;
+        marker.x = marker.pingX;
+        marker.y = marker.pingY;
+        marker.time = this.time;
+      }
+
+      const dt = clamp((now - marker.time) / this.delay, 0, 1);
+
+      marker.dX = lerp(marker.doX, marker.dnX, dt);
+      marker.dY = lerp(marker.doY, marker.dnY, dt);
+      marker.sprite.children[2].rotation = Math.atan2(marker.dY, marker.dX);
+
+      marker.sprite.height = marker.sprite.width = lerp(marker.oSize, marker.size, dt);
+      marker.sprite.x = lerp(marker.oX, marker.x, dt);
+      marker.sprite.y = lerp(marker.oY, marker.y, dt);
+
+      marker.sprite.alpha = (marker.validUntil - now) / (marker.validUntil - marker.createdAt);
+
+      marker.sprite.children[2].visible = !marker.inRange;
+    });
+    this.time = now;
+  }
+  updateMarkers() {
+    this.markers.forEach(marker => {
+      if (!this.api._.playerManager.getPlayer(marker.pid)) return;
+      marker.oSize = marker.sprite.height;
+      const size = (marker.size = 64 / this.api._.camera.nz);
+      const inset = this.inset / this.api._.camera.nz;
+
+      const { bottom, left, right, top } = this.cameraBox;
+      const { pingX, pingY } = marker;
+      const vt = this.visibleThreshold;
+
+      if (pingY + vt < bottom && pingY - vt > top && pingX + vt < right && pingX - vt > left) marker.inRange = true;
+      else {
+        const force = marker.inRange === true;
+        marker.inRange = false;
+
+        const { v, h } = MarkersController.getBounds(pingX, pingY, this.cameraBox, size / 2 + inset);
+        const { x: cX, y: cY } = this.api._.scene.container.pivot;
+        marker.doX = marker.dX;
+        marker.doY = marker.dY;
+        marker.dnX = h === null ? 0 : marker.pingX - cX;
+        marker.dnY = v === null ? 0 : marker.pingY - cY;
+        if (force) {
+          marker.doX = marker.dX = marker.dnX;
+          marker.doY = marker.dY = marker.dnY;
+        }
+
+        marker.oX = marker.sprite.x;
+        marker.oY = marker.sprite.y;
+        marker.x = h || marker.pingX;
+        marker.y = v || marker.pingY;
+
+        marker.time = this.time;
+      }
+    });
+
+    this.tick();
+  }
+  updateBoundingBox() {
+    const { x, y } = this.api._.scene.container.pivot;
+    const { x: sx, y: sy } = this.api._.scene.container.scale;
+
+    const vertical = window.innerHeight / 2 / sy;
+    const horizontal = window.innerWidth / 2 / sx;
+
+    const fixX = 1 / sx;
+    const fixY = 1 / sy;
+
+    const top = Number((y - vertical).toFixed(1));
+    const bottom = Number((y + vertical - fixY).toFixed(1));
+    const left = Number((x - horizontal).toFixed(1));
+    const right = Number((x + horizontal - fixX).toFixed(1));
+
+    const newCamera = { top, left, right, bottom };
+    let changed = false;
+
+    ['top', 'right', 'bottom', 'left'].forEach(key => {
+      if (this.cameraBox[key] !== newCamera[key]) {
+        this.cameraBox[key] = newCamera[key];
+        changed = true;
+      }
+    });
+
+    if (changed) this.updateMarkers();
+  }
+  static createPlayerSprite(player) {
+    const color = player.getCellColor();
+
+    // skin + name
+    const sprite = new PIXI.Sprite(player.texture);
+    sprite.anchor.set(0.5);
+    const nameSprite = new PIXI.Sprite(player.nameSprite.texture);
+    nameSprite.anchor.set(0.5);
+    nameSprite.zIndex = 1;
+    sprite.addChild(nameSprite);
+
+    // huge ass outline so it looks less like real player lol
+    const outlineWidth = 64;
+    const half = settings.cellSize / 2;
+    const outline = new PIXI.Graphics();
+    outline.lineStyle(outlineWidth, color, 1);
+    outline.drawCircle(0, 0, half - (outlineWidth - 1) / 2);
+    outline.endFill();
+    sprite.addChild(outline);
+
+    // not huge ass but arrow
+    const arrow = new PIXI.Graphics();
+    arrow.beginFill(color);
+    arrow.lineTo(0, 256);
+    arrow.lineTo(96, 128);
+    arrow.endFill();
+    arrow.pivot.set(-256 - 32, 128);
+    sprite.addChild(arrow);
+
+    return sprite;
+  }
+  static getBounds(x, y, cam, inset) {
+    let v = null,
+      h = null;
+    if (x < cam.left + inset) h = cam.left + inset;
+    else if (x > cam.right - inset) h = cam.right - inset;
+    if (y < cam.top + inset) v = cam.top + inset;
+    else if (y > cam.bottom - inset) v = cam.bottom - inset;
+
+    return { h, v };
+  }
 }
 
 const init = _ => {
