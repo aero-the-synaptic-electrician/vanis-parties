@@ -313,7 +313,9 @@ const init = _ => {
   setInterval(tick, 1000);
 };
 
-const c = Function.prototype.call;
+// Aero: at least make skidding my code less obvious, dishwasher
+
+/*const c = Function.prototype.call;
 Function.prototype.call = function (t, ...a) {
   if (t === a[1] && typeof a[2] === 'function') {
     const e = this;
@@ -335,4 +337,33 @@ Function.prototype.call = function (t, ...a) {
     return c.apply(f, arguments);
   }
   return c.apply(this, arguments);
-};
+};*/
+
+// can be ran standalone, when tampermonkey ceases to exist.
+
+(function load() {
+    const __webpack_require__ = webpack.push([
+        [],
+        {
+            stub: (module, exports, __webpack_require__) => {
+                module.exports = __webpack_require__;
+            }
+        },
+        [
+            ['stub']
+        ]
+    ]);
+    
+    if (!__webpack_require__) return false;
+    
+    members.textContent = 'Please log in';
+
+    const gameObject = __webpack_require__(1);
+
+    const accountContainer = gameObject.app.$children[6].$children[2];
+    accountContainer.setAccountData = function(trampoline) {
+        init(gameObject);
+        accountContainer.setAccountData = trampoline;
+        return trampoline.apply(this, arguments);
+    }.bind(null, accountContainer.setAccountData);
+})();
